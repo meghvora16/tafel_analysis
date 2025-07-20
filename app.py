@@ -17,7 +17,7 @@ class TafelAnalyzer:
             return anodic - cathodic
         except OverflowError:
             return np.zeros_like(E)  # Handling potential overflow
-
+  
     def _calculate_weights(self, E, E_corr, w_ac, W):
         weights = np.full_like(E, 100 - W)
         activation_mask = (E >= E_corr - w_ac) & (E <= E_corr + w_ac)
@@ -30,11 +30,11 @@ class TafelAnalyzer:
         
         # Define fitting bounds
         bounds = (
-            [E.min(), 0.01, 0.01, 1e-7, 1e-7, gamma_bounds[0]],  
-            [E.max(), 0.3, 0.3, 1e-3, 1e-3, gamma_bounds[1]]
+            [E.min(), 0.05, 0.05, 1e-8, 1e-8, gamma_bounds[0]],  
+            [E.max(), 0.5, 0.5, 1e-3, 1e-3, gamma_bounds[1]]
         )
         
-        p0 = [E_corr_initial, 0.1, 0.1, 1e-6, 1e-4, 3]  # Initial guess
+        p0 = [E_corr_initial, 0.1, 0.1, 1e-6, 1e-4, 3]  # Initial guesses
 
         sigma = self._calculate_weights(E, E_corr_initial, w_ac, W)
         
@@ -81,7 +81,7 @@ def process_excel(file):
     try:
         df = pd.read_excel(file)
 
-        # These are assumptions; ensure these column indices match your data file
+        # Assume columns locations correspond to your data file structure
         E = df.iloc[:, 0].values  
         i = df.iloc[:, 2].values
         
