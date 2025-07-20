@@ -10,7 +10,6 @@ class TafelAnalyzer:
         self.material_factor = material_factor
         
     def _mixed_control_fit(self, E, E_corr, beta_an, beta_cath, i_corr, i_L, gamma):
-        # Enhancement based on shared paper’s equations
         anodic = i_corr * np.exp(2.303 * (E - E_corr) / beta_an)
         cathodic_base = (i_corr / i_L) * np.exp(2.303 * (E_corr - E) / beta_cath)
         cathodic = i_L * (cathodic_base * gamma / (1 + cathodic_base * gamma)) * (1 / gamma)
@@ -24,7 +23,7 @@ class TafelAnalyzer:
 
     def fit_polarization_data(self, E, i, W=95, w_ac=0.05, gamma_bounds=(2, 4)):
         i_density = np.abs(i) / self.area
-        E_corr_initial = np.median(E)  # Adjustable based on dataset review
+        E_corr_initial = np.median(E)  
         
         bounds = (
             [E.min(), 0.05, 0.05, 1e-9, 1e-7, gamma_bounds[0]],  
@@ -55,21 +54,20 @@ class TafelAnalyzer:
         }
 
     def _plot_fit(self, E, i, fit_result):
-        # Create fit visualization for deeper insights
+        fig, ax = plt.subplots(figsize=(10, 6))
         E_fit = np.linspace(E.min(), E.max(), 500)
         i_fit = self._mixed_control_fit(E_fit, *list(fit_result.values())[:6])
         
-        plt.figure(figsize=(10, 6))
-        plt.semilogy(E, np.abs(i) / self.area, 'o', label='Experimental')
-        plt.semilogy(E_fit, np.abs(i_fit), 'r-', label='Fit')
-        plt.axvline(fit_result['E_corr'], color='k', linestyle='--', 
+        ax.semilogy(E, np.abs(i) / self.area, 'o', label='Experimental')
+        ax.semilogy(E_fit, np.abs(i_fit), 'r-', label='Fit')
+        ax.axvline(fit_result['E_corr'], color='k', linestyle='--', 
                     label=f'E_corr = {fit_result["E_corr"]:.3f} V')
-        plt.xlabel('Potential (V)')
-        plt.ylabel('|Current Density| (A/m²)')
-        plt.title('Tafel Analysis')
-        plt.legend()
-        plt.grid(True)
-        plt.show()
+        ax.set_xlabel('Potential (V)')
+        ax.set_ylabel('|Current Density| (A/m²)')
+        ax.set_title('Tafel Analysis')
+        ax.legend()
+        ax.grid(True)
+        st.pyplot(fig)
 
 def process_excel(file):
     analyzer = TafelAnalyzer()
@@ -77,23 +75,19 @@ def process_excel(file):
     try:
         df = pd.read_excel(file)
 
-        # Map the correct columns for Potential and Current
-        E = df.iloc[:, 0].values  # Potential applied (V)
-        i = df.iloc[:, 2].values  # WE(1).Current (A)
+        E = df.iloc[:, 0].values  
+        i = df.iloc[:, 2].values  
         
-        # Initial raw data plot for analysis
-        plt.figure(figsize=(10, 5))
-        plt.plot(E, i, marker='o')
-        plt.title('Raw Data Analysis')
-        plt.xlabel('Potential (V)')
-        plt.ylabel('Current (A)')
-        plt.grid(True)
-        st.pyplot()
+        fig, ax = plt.subplots(figsize=(10, 5))
+        ax.plot(E, i, marker='o')
+        ax.set_title('Raw Data Analysis')
+        ax.set_xlabel('Potential (V)')
+        ax.set_ylabel('Current (A)')
+        ax.grid(True)
+        st.pyplot(fig)
         
-        # Perform fit
         fit_result = analyzer.fit_polarization_data(E, i)
         
-        # Plot results
         analyzer._plot_fit(E, i, fit_result)
         
         st.write("Fit Results:")
@@ -102,7 +96,6 @@ def process_excel(file):
     except Exception as e:
         st.error(f"Failed to process file: {str(e)}")
 
-# Setup Streamlit interface
 st.title("Tafel Analysis Interface")
 st.write("Upload an Excel file with polarization data.")
 
