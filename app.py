@@ -90,6 +90,67 @@ def process_excel(file, area=1e-4, material_factor=0.327):
     """
     Process uploaded Excel file for Tafel analysis.
     """
-
     st.write("Reading data...")
     try:
+        df = pd.read_excel(file)
+        st.write("First 5 rows of your data:")
+        st.dataframe(df.head())
+
+        # Prompt for potential/current column if not obvious
+        col_options = df.columns.tolist()
+        E_col = st.selectbox("Select the column for Potential (V)", col_options, index=0)
+        i_col = st.selectbox("Select the column for Current (A)", col_options, index=min(2, len(col_options)-1))
+        E = df[E_col].values
+        i = df[i_col].values
+
+        # Quick plot of raw data
+        fig, ax = plt.subplots(figsize=(10, 5))
+        ax.plot(E, i, marker='o')
+        ax.set_title('Raw Data Analysis')
+        ax.set_xlabel('Potential (V)')
+        ax.set_ylabel('Current (A)')
+        ax.grid(True)
+        st.pyplot(fig)
+
+        st.write("Cleaning and fitting data...")
+
+        analyzer = TafelAnalyzer(area=area, material_factor=material_factor)
+        fit_result = analyzer.fit_polarization_data(E, i)
+        analyzer.plot_fit(E, i, fit_result)
+
+        # Clean up result display:
+        st.subheader("Fit Results")
+        nice_results = {
+            'E_corr (V)': fit_result['E_corr'],
+            'beta_an (V/dec)': fit_result['beta_an'],
+            'beta_cath (V/dec)': fit_result['beta_cath'],
+            'i_corr (A/m²)': fit_result['i_corr'],
+            'i_L (A/m²)': fit_result['i_L'],
+            'gamma': fit_result['gamma'],
+            'Corrosion Rate (mm/y or equiv.)': fit_result['corrosion_rate'],
+            'R_squared': fit_result['R_squared'],
+        }
+        st.json({k: f"{v:.4e}" if isinstance(v, float) else v for k, v in nice_results.items()})
+
+    except Exception as e:
+        st.error(f"Failed to process file: {str(e)}")
+
+def main():
+    st.title("Tafel Analysis Interface")
+    st.write(
+        "Upload an Excel file with polarization data to perform Tafel fitting.\n"
+        "Columns should include voltage and current (any units, select below)."
+    )
+
+    # Optional advanced settings
+    with st.expander("Advanced Options"):
+        area = st.number_input("Electrode area (m²)", value=1e-4, format="%.1e")
+        material_factor = st.number_input("Material factor for corrosion rate", value=0.327)
+
+    uploaded_file = st.file_uploader("Upload Excel File", type=["xlsx", "xls"])
+
+    if uploaded_file is not None:
+        process_excel(uploaded_file, area=area, material_factor=material_factor)
+
+if __name__ == "__main__":
+    main()
