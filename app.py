@@ -10,6 +10,7 @@ class TafelAnalyzer:
         self.material_factor = material_factor
 
     def mixed_control_fit(self, E, E_corr, beta_an, beta_cath, i_corr, i_L, gamma):
+        # Use signed current for better physical fitting!
         anodic = i_corr * np.exp(2.303 * (E - E_corr) / beta_an)
         cathodic_base = (i_corr / i_L) * np.exp(2.303 * (E_corr - E) / beta_cath)
         cathodic = i_L * (cathodic_base * gamma / (1 + cathodic_base * gamma)) * (1 / gamma)
@@ -21,38 +22,57 @@ class TafelAnalyzer:
         weights[activation_mask] = W
         return 1 / weights
 
-    def fit_polarization_data(self, E, i, W=95, w_ac=0.05, gamma_bounds=(1.5,5)):
-        i_density = np.abs(i) / self.area
-        E_corr_initial = float(np.median(E))
+    def fit_polarization_data(self, E, i, W=95, w_ac=0.05, gamma_bounds=(1.1, 20)):
+        # Use signed i for fitting!
+        i_density = i / self.area
+
+        # Robust guess for Ecorr: E where |i| is minimized
+        idx_Ecorr = np.argmin(np.abs(i_density))
+        E_corr_initial = E[idx_Ecorr]
+        i_corr_initial = np.abs(i_density[idx_Ecorr]) + 1e-8
+
+        # Wider, physical bounds
         bounds = (
-            [E.min(), 0.05, 0.05, 1e-9, 1e-8, gamma_bounds[0]],
-            [E.max(), 0.3, 0.3, 1e-4, 1e-3, gamma_bounds[1]]
+            [E.min(),   0.01,   0.01,   1e-10, 1e-10, gamma_bounds[0]], # Lower
+            [E.max(),   0.5,    0.5,    1e-2,  1e-1,  gamma_bounds[1]]  # Upper
         )
-        p0 = [E_corr_initial, 0.12, 0.06, 1e-7, 1e-5, 3]
+        p0 = [
+            E_corr_initial,   # E_corr
+            0.05,             # beta_an
+            0.07,             # beta_cath
+            i_corr_initial,   # i_corr
+            max(np.abs(i_density))*.5, # i_L: half max current
+            np.mean(gamma_bounds)      # gamma
+        ]
         sigma = self.calculate_weights(E, E_corr_initial, w_ac, W)
-        params, _ = curve_fit(
-            self.mixed_control_fit, E, i_density,
-            p0=p0, bounds=bounds, sigma=sigma, method='trf', maxfev=30000
-        )
-        i_corr = params[3]
-        corrosion_rate = i_corr * self.material_factor
+
+        try:
+            params, _ = curve_fit(
+                self.mixed_control_fit, E, i_density,
+                p0=p0, bounds=bounds, sigma=sigma, method='trf', maxfev=50000
+            )
+        except Exception as e:
+            st.error(f"Curve fitting failed: {str(e)}")
+            params = [np.nan]*6
 
         i_fit = self.mixed_control_fit(E, *params)
+        # R^2 for signed current!
         residuals = i_density - i_fit
-        ss_res = np.sum(residuals**2)
+        ss_res = np.sum(residuals ** 2)
         ss_tot = np.sum((i_density - np.mean(i_density)) ** 2)
         r_squared = 1 - (ss_res / ss_tot)
 
-        return {
+        fit_result = {
             'E_corr': params[0],
             'beta_an': params[1],
             'beta_cath': params[2],
             'i_corr': params[3],
             'i_L': params[4],
             'gamma': params[5],
-            'corrosion_rate': corrosion_rate,
+            'corrosion_rate': params[3] * self.material_factor,
             'R_squared': r_squared,
-        }, params
+        }
+        return fit_result, params
 
     def plot_full_fit(self, E, i, params, fit_result, area, region=None):
         fig, ax = plt.subplots(figsize=(10, 6))
@@ -67,6 +87,7 @@ class TafelAnalyzer:
         else:
             ax.semilogy(E, np.abs(i)/area, 'o', label='Experimental')
 
+        # Plot fit (using full E range!)
         ax.semilogy(E_full, np.abs(i_full_fit), 'r-', lw=2, label='Mixed Control Fit')
         ax.axvline(fit_result['E_corr'], color='k', linestyle='--', label=f'E_corr = {fit_result["E_corr"]:.3f} V')
 
@@ -90,11 +111,10 @@ def process_excel(file, area, material_factor):
         E = df[E_col].values
         i = df[i_col].values
 
-        # User may select region but ALWAYS fit and plot full curve over all data!
         Emin, Emax = float(np.min(E)), float(np.max(E))
         region = st.slider(
-            "Select Potential Range (V) for Fitting (optional, for better fit)", 
-            min_value=Emin, max_value=Emax, 
+            "Select Potential Range (V) for Fitting (optional, for best R²)",
+            min_value=Emin, max_value=Emax,
             value=(Emin, Emax), step=0.001
         )
         mask = (E >= region[0]) & (E <= region[1])
@@ -126,26 +146,26 @@ def process_excel(file, area, material_factor):
             'Corrosion Rate': fit_result['corrosion_rate'],
             'R_squared': fit_result['R_squared'],
         }
-        st.table({k: round(v,4) if isinstance(v, float) else v for k,v in results_disp.items()})
+        st.table({k: round(v, 4) if isinstance(v, float) else v for k, v in results_disp.items()})
 
         if fit_result["R_squared"] < 0.9:
-            st.warning("Low R² suggests model/data mismatch or inappropriate fit region. Try adjusting region, cleaning data, or rechecking parameters.")
+            st.warning("Low R² suggests model/data mismatch or inappropriate fit region. Try adjusting region or rechecking parameters. You may get best results if you only fit a region close to E_corr (typically within ±0.2~0.3V).")
 
     except Exception as e:
         st.error(f"Failed to process file: {str(e)}")
 
 def main():
-    st.title("Tafel Analysis – Full Mixed Activation/Diffusion Fit")
-    st.write("""
-    Upload your polarization data in Excel format (potential and current columns).
-    Select the appropriate columns. Select a fit region for best results.
-    The fit is always plotted as a full curve **over the entire potential range**,
-    so you can see how well the model matches *all* of your data.
+    st.title("Tafel Analysis – Mixed Activation/Diffusion Fit")
+    st.markdown("""
+    Upload your polarization data (potential & current columns, `.xlsx`).  
+    Select correct columns and choose a region for best fitting.  
+    If R² is low, try limiting fit to a region ±0.2V around Ecorr.
+    The red curve overlays the *entire plot* for visual check.
     """)
 
     with st.expander("Advanced Options (optional)"):
         area = st.number_input("Electrode area (m²)", value=1e-4, format="%.1e")
-        material_factor = st.number_input("Material factor (default ~0.327 for mild steel in mm/y)", value=0.327, format="%.3f")
+        material_factor = st.number_input("Material factor (default ≈0.327 for mild steel in mm/y)", value=0.327, format="%.3f")
     uploaded_file = st.file_uploader("Upload Excel File", type=["xlsx", "xls"])
 
     if uploaded_file is not None:
