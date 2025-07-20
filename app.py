@@ -10,10 +10,13 @@ class TafelAnalyzer:
         self.material_factor = material_factor
         
     def _mixed_control_fit(self, E, E_corr, beta_an, beta_cath, i_corr, i_L, gamma):
-        anodic = i_corr * np.exp(2.303 * (E - E_corr) / beta_an)
-        cathodic_base = (i_corr / i_L) * np.exp(2.303 * (E_corr - E) / beta_cath)
-        cathodic = i_L * (cathodic_base * gamma / (1 + cathodic_base * gamma)) * (1 / gamma)
-        return anodic - cathodic
+        try:
+            anodic = i_corr * np.exp(2.303 * (E - E_corr) / beta_an)
+            cathodic_base = (i_corr / i_L) * np.exp(2.303 * (E_corr - E) / beta_cath)
+            cathodic = i_L * (cathodic_base * gamma / (1 + cathodic_base * gamma)) * (1 / gamma)
+            return anodic - cathodic
+        except OverflowError:
+            return np.zeros_like(E)  # Handling potential overflow
 
     def _calculate_weights(self, E, E_corr, w_ac, W):
         weights = np.full_like(E, 100 - W)
@@ -22,25 +25,26 @@ class TafelAnalyzer:
         return 1 / weights
 
     def fit_polarization_data(self, E, i, W=95, w_ac=0.05, gamma_bounds=(2, 4)):
-        # Preprocessing and verification
         i_density = np.abs(i) / self.area
-        E_corr_initial = E[np.argmin(np.abs(i_density))]  # Initial guess for E_corr
+        E_corr_initial = np.mean(E)  # Initial guess for E_corr (midpoint)
         
-        # Determine appropriate bounds based on expected system behaviors
+        # Define fitting bounds
         bounds = (
             [E.min(), 0.01, 0.01, 1e-7, 1e-7, gamma_bounds[0]],  
             [E.max(), 0.3, 0.3, 1e-3, 1e-3, gamma_bounds[1]]
         )
         
-        p0 = [E_corr_initial, 0.1, 0.1, 1e-6, 1e-4, 3]
+        p0 = [E_corr_initial, 0.1, 0.1, 1e-6, 1e-4, 3]  # Initial guess
 
         sigma = self._calculate_weights(E, E_corr_initial, w_ac, W)
         
+        # Fit using `curve_fit`
         params, pcov = curve_fit(
             self._mixed_control_fit, E, i_density,
             p0=p0, bounds=bounds, sigma=sigma, maxfev=20000
         )
-        
+
+        # Calculate corrosion rate
         i_corr = params[3]
         corrosion_rate = i_corr * self.material_factor
         
@@ -77,9 +81,11 @@ def process_excel(file):
     try:
         df = pd.read_excel(file)
 
+        # These are assumptions; ensure these column indices match your data file
         E = df.iloc[:, 0].values  
-        i = df.iloc[:, 2].values  
+        i = df.iloc[:, 2].values
         
+        # Plot raw data
         fig, ax = plt.subplots(figsize=(10, 5))
         ax.plot(E, i, marker='o')
         ax.set_title('Raw Data Analysis')
@@ -89,10 +95,14 @@ def process_excel(file):
         st.pyplot(fig)
         
         st.write("Cleaning and fitting data...")
+        
+        # Fit the data using the Tafel model
         fit_result = analyzer.fit_polarization_data(E, i)
         
+        # Plot fitted data
         analyzer._plot_fit(E, i, fit_result)
         
+        # Display fit results
         st.write("Fit Results:")
         st.json(fit_result)
         
