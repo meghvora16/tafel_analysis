@@ -148,7 +148,7 @@ def process_excel(file):
         st.error(f"Failed to process file: {str(e)}")
 
 def main():
-    st.title("Tafel Mixed-Control Fit (region-selectable, scientific notation)")
+    st.title("Tafel Mixed-Control Fit")
     st.markdown("""
     Upload polarization data, select the correct columns, and use the slider to select the region for fitting (ideally the Tafel/mixed region).
     All fit parameters are shown in scientific format.
