@@ -22,15 +22,17 @@ class TafelAnalyzer:
         return 1 / weights
 
     def fit_polarization_data(self, E, i, W=95, w_ac=0.05, gamma_bounds=(2, 4)):
+        # Preprocessing and verification
         i_density = np.abs(i) / self.area
-        E_corr_initial = np.median(E)  
+        E_corr_initial = E[np.argmin(np.abs(i_density))]  # Initial guess for E_corr
         
+        # Determine appropriate bounds based on expected system behaviors
         bounds = (
-            [E.min(), 0.05, 0.05, 1e-9, 1e-7, gamma_bounds[0]],  
-            [E.max(), 0.5, 0.5, 1e-3, 1e-2, gamma_bounds[1]]
+            [E.min(), 0.01, 0.01, 1e-7, 1e-7, gamma_bounds[0]],  
+            [E.max(), 0.3, 0.3, 1e-3, 1e-3, gamma_bounds[1]]
         )
         
-        p0 = [E_corr_initial, 0.3, 0.3, 1e-6, 1e-4, 3]
+        p0 = [E_corr_initial, 0.1, 0.1, 1e-6, 1e-4, 3]
 
         sigma = self._calculate_weights(E, E_corr_initial, w_ac, W)
         
@@ -86,6 +88,7 @@ def process_excel(file):
         ax.grid(True)
         st.pyplot(fig)
         
+        st.write("Cleaning and fitting data...")
         fit_result = analyzer.fit_polarization_data(E, i)
         
         analyzer._plot_fit(E, i, fit_result)
