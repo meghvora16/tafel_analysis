@@ -10,6 +10,7 @@ class TafelAnalyzer:
         self.material_factor = material_factor
         
     def _mixed_control_fit(self, E, E_corr, beta_an, beta_cath, i_corr, i_L, gamma):
+        # Enhancement based on shared paper’s equations
         anodic = i_corr * np.exp(2.303 * (E - E_corr) / beta_an)
         cathodic_base = (i_corr / i_L) * np.exp(2.303 * (E_corr - E) / beta_cath)
         cathodic = i_L * (cathodic_base * gamma / (1 + cathodic_base * gamma)) * (1 / gamma)
@@ -23,10 +24,10 @@ class TafelAnalyzer:
 
     def fit_polarization_data(self, E, i, W=95, w_ac=0.05, gamma_bounds=(2, 4)):
         i_density = np.abs(i) / self.area
-        E_corr_initial = np.median(E)
+        E_corr_initial = np.median(E)  # Adjustable based on dataset review
         
         bounds = (
-            [E.min(), 0.05, 0.05, 1e-9, 1e-9, gamma_bounds[0]],  
+            [E.min(), 0.05, 0.05, 1e-9, 1e-7, gamma_bounds[0]],  
             [E.max(), 0.5, 0.5, 1e-3, 1e-2, gamma_bounds[1]]
         )
         
@@ -53,37 +54,22 @@ class TafelAnalyzer:
             'covariance': pcov
         }
 
-    def sensitivity_analysis(self, E, i, w_ac_range=np.linspace(0.02, 0.1, 5), 
-                             W_range=np.linspace(50, 90, 5)):
-        results = []
-        for W in W_range:
-            for w_ac in w_ac_range:
-                try:
-                    fit = self.fit_polarization_data(E, i, W=int(W), w_ac=w_ac)
-                    results.append({
-                        'W': W,
-                        'w_ac': w_ac,
-                        'beta_cath': fit['beta_cath'],
-                        'i_L': fit['i_L']
-                    })
-                except:
-                    continue
-                    
-        return pd.DataFrame(results)
-
-    def _plot_sensitivity(self, results):
-        df = pd.DataFrame(results)
+    def _plot_fit(self, E, i, fit_result):
+        # Create fit visualization for deeper insights
+        E_fit = np.linspace(E.min(), E.max(), 500)
+        i_fit = self._mixed_control_fit(E_fit, *list(fit_result.values())[:6])
         
-        plt.figure(figsize=(12, 6))
-        for W, group in df.groupby('W'):
-            plt.plot(group['w_ac'], group['beta_cath'], 'o-', label=f'W={W}%')
-            
-        plt.xlabel('Activation Window (w_ac, V)')
-        plt.ylabel('Cathodic Tafel Slope (V/dec)')
-        plt.title('Sensitivity Analysis of Weight Parameters')
+        plt.figure(figsize=(10, 6))
+        plt.semilogy(E, np.abs(i) / self.area, 'o', label='Experimental')
+        plt.semilogy(E_fit, np.abs(i_fit), 'r-', label='Fit')
+        plt.axvline(fit_result['E_corr'], color='k', linestyle='--', 
+                    label=f'E_corr = {fit_result["E_corr"]:.3f} V')
+        plt.xlabel('Potential (V)')
+        plt.ylabel('|Current Density| (A/m²)')
+        plt.title('Tafel Analysis')
         plt.legend()
         plt.grid(True)
-        st.pyplot(plt)
+        plt.show()
 
 def process_excel(file):
     analyzer = TafelAnalyzer()
@@ -95,28 +81,20 @@ def process_excel(file):
         E = df.iloc[:, 0].values  # Potential applied (V)
         i = df.iloc[:, 2].values  # WE(1).Current (A)
         
-        fit_result = analyzer.fit_polarization_data(E, i)
-        sensitivity_df = analyzer.sensitivity_analysis(E, i)
-        
-        # Plot Tafel Analysis
-        E_fit = np.linspace(E.min(), E.max(), 500)
-        i_fit = analyzer._mixed_control_fit(E_fit, *list(fit_result.values())[:6])
-        
-        plt.figure(figsize=(10, 6))
-        plt.semilogy(E, np.abs(i) / analyzer.area, 'o', label='Experimental')
-        plt.semilogy(E_fit, np.abs(i_fit), 'r-', label='Fit')
-        plt.axvline(fit_result['E_corr'], color='k', linestyle='--', 
-                    label=f'E_corr = {fit_result["E_corr"]:.3f} V')
+        # Initial raw data plot for analysis
+        plt.figure(figsize=(10, 5))
+        plt.plot(E, i, marker='o')
+        plt.title('Raw Data Analysis')
         plt.xlabel('Potential (V)')
-        plt.ylabel('|Current Density| (A/m²)')
-        plt.title('Tafel Analysis')
-        plt.legend()
+        plt.ylabel('Current (A)')
         plt.grid(True)
-        st.pyplot(plt)
+        st.pyplot()
         
-        # Show sensitivity analysis plot
-        st.write("Sensitivity Analysis:")
-        analyzer._plot_sensitivity(sensitivity_df)
+        # Perform fit
+        fit_result = analyzer.fit_polarization_data(E, i)
+        
+        # Plot results
+        analyzer._plot_fit(E, i, fit_result)
         
         st.write("Fit Results:")
         st.json(fit_result)
