@@ -4,6 +4,12 @@ import numpy as np
 import matplotlib.pyplot as plt
 from scipy.optimize import curve_fit
 
+def sci_notation(val, precision=3):
+    try:
+        return f"{float(val):.{precision}e}"
+    except (TypeError, ValueError):
+        return val
+
 class TafelAnalyzer:
     def __init__(self, material_factor=0.327):
         self.material_factor = material_factor
@@ -62,13 +68,13 @@ class TafelAnalyzer:
         r_squared = 1 - (ss_res / ss_tot)
 
         fit_result = {
-            'E_corr': float(params[0]),
-            'beta_an': float(params[1]),
-            'beta_cath': float(params[2]),
-            'i_corr': float(params[3]),
-            'i_L': float(params[4]),
+            'E_corr (V)': float(params[0]),
+            'beta_an (V/dec)': float(params[1]),
+            'beta_cath (V/dec)': float(params[2]),
+            'i_corr (A)': float(params[3]),
+            'i_L (A)': float(params[4]),
             'gamma': float(params[5]),
-            'corrosion_rate': float(params[3]) * self.material_factor,
+            'Corrosion Rate (mm/y*)': float(params[3]) * self.material_factor,
             'R_squared': float(r_squared),
         }
         return fit_result, params
@@ -85,7 +91,7 @@ class TafelAnalyzer:
             ax.semilogy(E, np.abs(i), 'o', color='C0', label='Experimental Data')
 
         ax.semilogy(E_full, np.abs(i_full_fit), 'r-', lw=2, label='Mixed Control Fit')
-        ax.axvline(fit_result['E_corr'], color='k', linestyle='--', lw=1.5, label=f'E_corr = {fit_result["E_corr"]:.3f} V')
+        ax.axvline(fit_result['E_corr (V)'], color='k', linestyle='--', lw=1.5, label=f'E_corr = {sci_notation(fit_result["E_corr (V)"],3)} V')
         ax.set_xlabel('Potential (V)')
         ax.set_ylabel('|Current| (A)')
         ax.set_title(f'Tafel Mixed Control Fit (R² = {fit_result["R_squared"]:.4f})')
@@ -99,14 +105,12 @@ def process_excel(file):
         df = pd.read_excel(file)
         st.write("Preview of your uploaded data:")
         st.dataframe(df.head())
-
         col_options = list(df.columns)
         E_col = st.selectbox("Select the column for Potential (V)", col_options, index=0)
         i_col = st.selectbox("Select the column for Current (A)", col_options, index=min(2, len(col_options)-1))
         E = df[E_col].values
         i = df[i_col].values
 
-        # Auto initial Ecorr range
         idx_Ecorr = np.argmin(np.abs(i))
         E_corr_guess = float(E[idx_Ecorr])
         default_window = 0.25
@@ -119,7 +123,6 @@ def process_excel(file):
         E_fit = E[fit_mask]
         i_fit = i[fit_mask]
 
-        # Raw data with region
         fig, ax = plt.subplots(figsize=(10, 4))
         ax.plot(E, i, marker='o', label='Raw Data')
         ax.axvspan(region[0], region[1], color='yellow', alpha=0.3, label='Fit region')
@@ -135,8 +138,8 @@ def process_excel(file):
         analyzer.plot_full_fit(E, i, params, fit_result, fit_mask=fit_mask)
 
         st.subheader("Mixed Control Fit Parameters (using fit region):")
-        results_disp = {k:fit_result[k] for k in fit_result}
-        st.table({k: round(v, 6) if isinstance(v, float) else v for k, v in results_disp.items()})
+        sci_results = {k: sci_notation(v, 3) for k, v in fit_result.items()}
+        st.table(sci_results)
 
         if fit_result["R_squared"] < 0.9:
             st.warning("Low R²: Try adjusting fit region closer to the central Tafel region.")
@@ -145,10 +148,10 @@ def process_excel(file):
         st.error(f"Failed to process file: {str(e)}")
 
 def main():
-    st.title("Tafel Mixed-Control Fit (with Region Selection)")
+    st.title("Tafel Mixed-Control Fit (region-selectable, scientific notation)")
     st.markdown("""
     Upload polarization data, select the correct columns, and use the slider to select the region for fitting (ideally the Tafel/mixed region).
-    The model (red curve) overlays the *entire* plot but is fitted only using points inside the fit region.
+    All fit parameters are shown in scientific format.
     """)
 
     uploaded_file = st.file_uploader("Upload Excel File", type=["xlsx", "xls"])
