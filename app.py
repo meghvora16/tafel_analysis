@@ -90,9 +90,11 @@ def process_excel(file):
     analyzer = TafelAnalyzer()
     
     try:
-        df = pd.read_excel(file, skiprows=6, names=["E/V", "i/A"]).dropna()
-        E = df["E/V"].values
-        i = df["i/A"].values
+        df = pd.read_excel(file)
+
+        # Map the correct columns for Potential and Current
+        E = df.iloc[:, 0].values  # Potential applied (V)
+        i = df.iloc[:, 2].values  # WE(1).Current (A)
         
         fit_result = analyzer.fit_polarization_data(E, i)
         sensitivity_df = analyzer.sensitivity_analysis(E, i)
@@ -125,7 +127,7 @@ def process_excel(file):
 
 # Setup Streamlit interface
 st.title("Tafel Analysis Interface")
-st.write("Upload an Excel file with polarization data (columns: E/V, i/A).")
+st.write("Upload an Excel file with polarization data.")
 
 uploaded_file = st.file_uploader("Upload Excel File", type="xlsx")
 
