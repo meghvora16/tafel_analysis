@@ -1,163 +1,155 @@
 import streamlit as st
-import pandas as pd
 import numpy as np
+import pandas as pd
 import matplotlib.pyplot as plt
-from scipy.optimize import curve_fit
+from scipy.stats import linregress
 
-def sci_notation(val, precision=3):
-    try:
-        return f"{float(val):.{precision}e}"
-    except (TypeError, ValueError):
-        return val
+st.set_page_config(layout="wide")
+st.title("Tafel Analysis App (Auto Linear Region and Intersection Method)")
 
-class TafelAnalyzer:
-    def __init__(self, material_factor=0.327):
-        self.material_factor = material_factor
+uploaded_file = st.file_uploader(
+    "Upload polarization file (.xlsx/.csv)", type=['xlsx', 'csv'], accept_multiple_files=False
+)
 
-    def mixed_control_fit(self, E, E_corr, beta_an, beta_cath, i_corr, i_L, gamma):
-        anodic = i_corr * np.exp(2.303 * (E - E_corr) / beta_an)
-        cathodic_base = (i_corr / i_L) * np.exp(2.303 * (E_corr - E) / beta_cath)
-        cathodic = i_L * (cathodic_base * gamma / (1 + cathodic_base * gamma)) * (1 / gamma)
-        return anodic - cathodic
+def clean_data(E, I):
+    mask = (I != 0) & np.isfinite(E) & np.isfinite(I)
+    return E[mask], I[mask]
 
-    def fit_polarization_data(self, E, i):
-        E = np.array(E, dtype=float)
-        i = np.array(i, dtype=float)
-        # Initial parameter guesses
-        idx_Ecorr = np.argmin(np.abs(i))
-        E_corr_initial = float(E[idx_Ecorr])
-        i_corr_initial = np.abs(i[idx_Ecorr]) + 1e-12
-        i_L_guess = np.clip(np.max(np.abs(i)), 1e-9, 1e2)
-        gamma_guess = 3.0
+def find_best_linear_region(E, logI, side='cathodic', Ecorr=None, min_pts=8, max_pts=25):
+    best_r2 = -np.inf
+    best_start, best_end = 0, 0
+    if side == 'cathodic':
+        region_mask = (E < Ecorr)
+    else:
+        region_mask = (E > Ecorr)
+    E_side = E[region_mask]
+    logI_side = logI[region_mask]
+    n = len(E_side)
+    if n < min_pts:
+        return np.array([], dtype=int), -np.inf
+    idx_sort = np.argsort(E_side)
+    E_side = E_side[idx_sort]
+    logI_side = logI_side[idx_sort]
+    for w in range(min_pts, min(max_pts+1, n+1)):
+        for i in range(n - w + 1):
+            x_win = E_side[i:i+w]
+            y_win = logI_side[i:i+w]
+            if len(np.unique(x_win)) < 2:
+                continue
+            slope, intercept, r_value, _, _ = linregress(x_win, y_win)
+            r2 = r_value ** 2
+            if r2 > best_r2:
+                best_r2 = r2
+                best_start = i
+                best_end = i+w
+    if best_end > best_start:
+        chosen_Es = E_side[best_start:best_end]
+        indices = np.where(np.isin(E, chosen_Es))[0]
+        return indices, best_r2
+    else:
+        return np.array([], dtype=int), -np.inf
 
-        # Set realistic parameter bounds
-        E_range = [E.min(), E.max()]
-        i_range = [1e-12, np.max(np.abs(i))*100]
-        beta_bounds = (1e-3, 0.5)
-        gamma_bounds = (1.01, 100)
-        bounds_lower = [
-            E_range[0], beta_bounds[0], beta_bounds[0], i_range[0], i_range[0], gamma_bounds[0]
-        ]
-        bounds_upper = [
-            E_range[1], beta_bounds[1], beta_bounds[1], i_range[1], i_range[1], gamma_bounds[1]
-        ]
-        p0 = [
-            float(E_corr_initial),   # E_corr
-            0.05,                   # beta_an
-            0.07,                   # beta_cath
-            float(i_corr_initial),
-            float(i_L_guess),
-            gamma_guess
-        ]
-        p0 = np.clip(p0, bounds_lower, bounds_upper)
+def fit_region(E, logI):
+    slope, intercept, r2, _, _ = linregress(E, logI)
+    return slope, intercept, r2**2
 
-        try:
-            params, _ = curve_fit(
-                self.mixed_control_fit, E, i,
-                p0=p0, bounds=(bounds_lower, bounds_upper),
-                method='trf', maxfev=100_000
-            )
-        except Exception as e:
-            st.error(f"Fitting failed: {e}")
-            params = [np.nan]*6
+if uploaded_file:
+    if uploaded_file.name.endswith('.csv'):
+        df = pd.read_csv(uploaded_file)
+    else:
+        df = pd.read_excel(uploaded_file)
 
-        i_fit = self.mixed_control_fit(E, *params)
-        residuals = i - i_fit
-        ss_res = np.sum(residuals ** 2)
-        ss_tot = np.sum((i - np.mean(i)) ** 2)
-        r_squared = 1 - (ss_res / ss_tot)
+    st.write("#### Data preview")
+    st.dataframe(df.head())
 
-        fit_result = {
-            'E_corr (V)': float(params[0]),
-            'beta_an (V/dec)': float(params[1]),
-            'beta_cath (V/dec)': float(params[2]),
-            'i_corr (A)': float(params[3]),
-            'i_L (A)': float(params[4]),
-            'gamma': float(params[5]),
-            'Corrosion Rate (mm/y*)': float(params[3]) * self.material_factor,
-            'R_squared': float(r_squared),
-        }
-        return fit_result, params
+    cols = df.columns.tolist()
+    guess_E = next((c for c in cols if "potential" in c.lower()), cols[0])
+    guess_I = next((c for c in cols if "current" in c.lower()), cols[1])
+    potential_col = st.selectbox("Select the Potential column:", cols, index=cols.index(guess_E))
+    current_col = st.selectbox("Select the Current column:", cols, index=cols.index(guess_I))
 
-    def plot_full_fit(self, E, i, params, fit_result, fit_mask=None):
-        fig, ax = plt.subplots(figsize=(10, 6))
-        E_full = np.linspace(np.min(E), np.max(E), 400)
-        i_full_fit = self.mixed_control_fit(E_full, *params)
+    E_raw = df[potential_col].values.astype(float)
+    I_raw = df[current_col].values.astype(float)
+    E, I = clean_data(E_raw, np.abs(I_raw))
 
-        if fit_mask is not None:
-            ax.semilogy(E[~fit_mask], np.abs(i[~fit_mask]), 'o', color='gray', alpha=0.4, label='Outside fit region')
-            ax.semilogy(E[fit_mask], np.abs(i[fit_mask]), 'o', color='C0', label='Fit region data')
-        else:
-            ax.semilogy(E, np.abs(i), 'o', color='C0', label='Experimental Data')
+    if len(E) < 10:
+        st.warning("Too few valid data points for analysis.")
+        st.stop()
 
-        ax.semilogy(E_full, np.abs(i_full_fit), 'r-', lw=2, label='Mixed Control Fit')
-        ax.axvline(fit_result['E_corr (V)'], color='k', linestyle='--', lw=1.5, label=f'E_corr = {sci_notation(fit_result["E_corr (V)"],3)} V')
-        ax.set_xlabel('Potential (V)')
-        ax.set_ylabel('|Current| (A)')
-        ax.set_title(f'Tafel Mixed Control Fit (R² = {fit_result["R_squared"]:.4f})')
-        ax.legend()
-        ax.grid(True, which='both', ls='--')
-        st.pyplot(fig)
+    idx_sort = np.argsort(E)
+    E = E[idx_sort]
+    I = I[idx_sort]
+    logI = np.log10(I)
 
-def process_excel(file):
-    st.write("Reading data...")
-    try:
-        df = pd.read_excel(file)
-        st.write("Preview of your uploaded data:")
-        st.dataframe(df.head())
-        col_options = list(df.columns)
-        E_col = st.selectbox("Select the column for Potential (V)", col_options, index=0)
-        i_col = st.selectbox("Select the column for Current (A)", col_options, index=min(2, len(col_options)-1))
-        E = df[E_col].values
-        i = df[i_col].values
+    # Initial guess for Ecorr (minimum |I|)
+    idx_guess_Ecorr = np.argmin(np.abs(I))
+    Ecorr_guess = E[idx_guess_Ecorr]
+    st.write(f"**Auto-detected Ecorr (initial guess):** {Ecorr_guess:.3f} V")
 
-        idx_Ecorr = np.argmin(np.abs(i))
-        E_corr_guess = float(E[idx_Ecorr])
-        default_window = 0.25
-        Eleft = max(E.min(), E_corr_guess - default_window)
-        Eright = min(E.max(), E_corr_guess + default_window)
+    cath_indices, r2_c = find_best_linear_region(E, logI, 'cathodic', Ecorr_guess, min_pts=8, max_pts=25)
+    anod_indices, r2_a = find_best_linear_region(E, logI, 'anodic', Ecorr_guess, min_pts=8, max_pts=25)
 
-        region = st.slider("Select Potential Range For Fitting (focus on Tafel/mixed region!)",
-                           float(E.min()), float(E.max()), (Eleft, Eright), step=0.001)
-        fit_mask = (E >= region[0]) & (E <= region[1])
-        E_fit = E[fit_mask]
-        i_fit = i[fit_mask]
+    if len(cath_indices) < 5 or len(anod_indices) < 5:
+        st.error("Could not find a wide enough linear region automatically. Try cleaner data or adjust min/max window size.")
+        st.stop()
 
-        fig, ax = plt.subplots(figsize=(10, 4))
-        ax.plot(E, i, marker='o', label='Raw Data')
-        ax.axvspan(region[0], region[1], color='yellow', alpha=0.3, label='Fit region')
-        ax.set_title('Raw Data & Fit Region')
-        ax.set_xlabel('Potential (V)')
-        ax.set_ylabel('Current (A)')
-        ax.grid(True)
-        ax.legend()
-        st.pyplot(fig)
+    E_cath, logI_cath, I_cath = E[cath_indices], logI[cath_indices], I[cath_indices]
+    E_anod, logI_anod, I_anod = E[anod_indices], logI[anod_indices], I[anod_indices]
 
-        analyzer = TafelAnalyzer()
-        fit_result, params = analyzer.fit_polarization_data(E_fit, i_fit)
-        analyzer.plot_full_fit(E, i, params, fit_result, fit_mask=fit_mask)
+    # Fit each region
+    slope_c, int_c, fitr2_c = fit_region(E_cath, logI_cath)
+    slope_a, int_a, fitr2_a = fit_region(E_anod, logI_anod)
 
-        st.subheader("Mixed Control Fit Parameters (using fit region):")
-        sci_results = {k: sci_notation(v, 3) for k, v in fit_result.items()}
-        st.table(sci_results)
+    # Tafel slopes
+    beta_c = -2.303/slope_c
+    beta_a = 2.303/slope_a
 
-        if fit_result["R_squared"] < 0.9:
-            st.warning("Low R²: Try adjusting fit region closer to the central Tafel region.")
+    # Now intersect for Ecorr, Icorr (intersection of Tafel lines)
+    if slope_c == slope_a:
+        st.error("Anodic and cathodic Tafel slopes are identical; cannot find intersection!")
+        st.stop()
+    Ecorr = (int_a - int_c) / (slope_c - slope_a)
+    logIcorr = slope_c * Ecorr + int_c  # or slope_a * Ecorr + int_a
+    Icorr = 10 ** logIcorr
+    corrosion_rate = 0.00327 * Icorr  # mm/y, placeholder
 
-    except Exception as e:
-        st.error(f"Failed to process file: {str(e)}")
+    st.write(f"**Intersection Ecorr:** `{Ecorr:.5f}` V")
+    st.write(f"**Intersection Icorr:** `{Icorr:.3e}` A")
 
-def main():
-    st.title("Tafel Mixed-Control Fit")
-    st.markdown("""
-    Upload polarization data, select the correct columns, and use the slider to select the region for fitting (ideally the Tafel/mixed region).
-    All fit parameters are shown in scientific format.
-    """)
+    # -------- Raw plot with regions highlighted -------
+    fig0, ax0 = plt.subplots(figsize=(8,4))
+    ax0.plot(E, I, '.', color='lightgray', ms=3, label='All Data')
+    ax0.plot(E_cath, I_cath, 'x', color='blue', label='Best cathodic linear region')
+    ax0.plot(E_anod, I_anod, 'o', color='orange', label='Best anodic linear region')
+    ax0.axvline(Ecorr, color='purple', ls='--', lw=1.7, label=f'Ecorr (fit) = {Ecorr:.3f} V')
+    ax0.set_xlabel('Potential (V)')
+    ax0.set_ylabel('Current (A)')
+    ax0.legend()
+    ax0.grid(True)
+    st.pyplot(fig0)
+    st.caption("Best-fit Tafel region on raw LSV curve (detected automatically).")
 
-    uploaded_file = st.file_uploader("Upload Excel File", type=["xlsx", "xls"])
+    # ------- Tafel plot -----------
+    fig, ax = plt.subplots(figsize=(8,4))
+    ax.plot(E, logI, '.', color="lightgray", markersize=3, label="All log|I| vs E")
+    ax.plot(E_cath, logI_cath, 'x', color='blue', label="Auto cathodic region")
+    ax.plot(E_anod, logI_anod, 'o', color='orange', label="Auto anodic region")
+    ax.plot(E_cath, slope_c*E_cath + int_c, 'b-', lw=2, label=f'Cathodic Fit (R²={fitr2_c:.2f})')
+    ax.plot(E_anod, slope_a*E_anod + int_a, 'r-', lw=2, label=f'Anodic Fit (R²={fitr2_a:.2f})')
+    ax.axvline(Ecorr, color='purple', linestyle='--', lw=1.7, label=f'Ecorr (fit) = {Ecorr:.3f} V')
+    ax.set_xlabel("Potential (V)")
+    ax.set_ylabel("log10(Current / A)")
+    ax.legend()
+    ax.grid(True)
+    st.pyplot(fig)
+    st.caption("Auto-detected most linear Tafel regions and linear fits. Ecorr/Icorr from Tafel intersection.")
 
-    if uploaded_file is not None:
-        process_excel(uploaded_file)
-
-if __name__ == "__main__":
-    main()
+    # -------- Table of results --------
+    st.markdown("### **Tafel Fit Parameters (auto linear region):**")
+    st.write(f"**Ecorr (V, intersection):** `{Ecorr:.5f}`")
+    st.write(f"**Icorr (A, intersection):** `{Icorr:.3e}`")
+    st.write(f"**Beta_a (V/dec):** `{beta_a:.3e}`")
+    st.write(f"**Beta_c (V/dec):** `{beta_c:.3e}`")
+    st.write(f"**Corrosion Rate (mm/y):** `{corrosion_rate:.3e}`")
+    st.write(f"**R² anodic:** `{fitr2_a:.3f}`")
+    st.write(f"**R² cathodic:** `{fitr2_c:.3f}`")
